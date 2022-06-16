@@ -829,6 +829,11 @@ urlpatterns = [
     ),
     # Organizations
     url(
+        r"^events/$",
+        OrganizationEventsEndpoint.as_view(),
+        name="sentry-api-0-subdomain-organization-events",
+    ),
+    url(
         r"^organizations/",
         include(
             [

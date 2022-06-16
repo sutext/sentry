@@ -10,6 +10,7 @@ from snuba_sdk.column import Column
 from snuba_sdk.conditions import InvalidConditionError
 from snuba_sdk.function import Function
 
+from sentry.api.bases.organization import generate_customer_url
 from sentry.discover.models import TeamKeyTransaction
 from sentry.exceptions import IncompatibleMetricsQuery, InvalidSearchQuery
 from sentry.models import ApiKey, ProjectTeam, ProjectTransactionThreshold, ReleaseStages
@@ -5975,17 +5976,22 @@ class OrganizationEventsEndpointTest(APITestCase, SnubaTestCase):
         self.transaction_data = load_data("transaction", timestamp=before_now(minutes=1))
         self.features = {}
 
+    def client_get(self, *args, **kwargs):
+        return self.client.get(*args, **kwargs)
+
+    def reverse_url(self):
+        return reverse(
+            self.viewname,
+            kwargs={"organization_slug": self.organization.slug},
+        )
+
     def do_request(self, query, features=None):
         if features is None:
             features = {"organizations:discover-basic": True}
         features.update(self.features)
         self.login_as(user=self.user)
-        url = reverse(
-            self.viewname,
-            kwargs={"organization_slug": self.organization.slug},
-        )
         with self.feature(features):
-            return self.client.get(url, query, format="json")
+            return self.client_get(self.reverse_url(), query, format="json")
 
     def test_no_projects(self):
         response = self.do_request({})
@@ -6005,11 +6011,8 @@ class OrganizationEventsEndpointTest(APITestCase, SnubaTestCase):
         api_key = ApiKey.objects.create(organization=self.organization, scope_list=["org:read"])
         query = {"field": ["project.name", "environment"], "project": [project.id]}
 
-        url = reverse(
-            self.viewname,
-            kwargs={"organization_slug": self.organization.slug},
-        )
-        response = self.client.get(
+        url = self.reverse_url()
+        response = self.client_get(
             url,
             query,
             format="json",
@@ -9832,13 +9835,10 @@ class OrganizationEventsEndpointTest(APITestCase, SnubaTestCase):
 
         features = {"organizations:discover-basic": True}
         features.update(self.features)
-        url = reverse(
-            self.viewname,
-            kwargs={"organization_slug": self.organization.slug},
-        )
+        url = self.reverse_url()
 
         with self.feature(features):
-            self.client.get(
+            self.client_get(
                 url,
                 query,
                 format="json",
@@ -10981,6 +10981,36 @@ class OrganizationEventsEndpointTest(APITestCase, SnubaTestCase):
             "query": "Did you know you can replace chained or conditions like `field:a OR field:b OR field:c` with `field:[a,b,c]`",
             "columns": None,
         }
+
+
+class CustomerOrganizationEventsEndpointTest(OrganizationEventsEndpointTest):
+    viewname = "sentry-api-0-subdomain-organization-events"
+
+    def client_get(self, *args, **kwargs):
+        if "HTTP_HOST" not in kwargs:
+            kwargs["HTTP_HOST"] = generate_customer_url(self.organization.slug, region="us")
+        return self.client.get(
+            *args,
+            **kwargs,
+        )
+
+    def reverse_url(self):
+        return reverse(self.viewname)
+
+    def test_invalid_org_slug(self):
+        self.organization.slug = "not-found"
+        response = self.do_request({})
+
+        assert response.status_code == 404, response.content
+
+    def test_non_customer_base_host(self):
+        self.login_as(user=self.user)
+        with self.feature({"organizations:discover-basic": True}):
+            query = {}
+            response = self.client_get(
+                self.reverse_url(), query, format="json", HTTP_HOST="testserver"
+            )
+            assert response.status_code == 404, response.content
 
 
 class OrganizationEventsMetricsEnhancedPerformanceEndpointTest(MetricsEnhancedPerformanceTestCase):
