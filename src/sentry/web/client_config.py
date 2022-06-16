@@ -138,6 +138,8 @@ def get_client_config(request=None):
 
     public_dsn = _get_public_dsn()
 
+    last_organization = session["activeorg"] if session and "activeorg" in session else None
+
     context = {
         "singleOrganization": settings.SENTRY_SINGLE_ORGANIZATION,
         "supportEmail": get_support_mail(),
@@ -160,7 +162,7 @@ def get_client_config(request=None):
         # Note `lastOrganization` should not be expected to update throughout frontend app lifecycle
         # It should only be used on a fresh browser nav to a path where an
         # organization is not in context
-        "lastOrganization": session["activeorg"] if session and "activeorg" in session else None,
+        "lastOrganization": last_organization,
         "languageCode": language_code,
         "userIdentity": user_identity,
         "csrfCookieName": settings.CSRF_COOKIE_NAME,
@@ -180,7 +182,9 @@ def get_client_config(request=None):
         "validateSUForm": getattr(settings, "VALIDATE_SUPERUSER_ACCESS_CATEGORY_AND_REASON", False),
         # TODO: to be implemented in the future when customer domain work evolves
         "sentryUrl": options.get("system.url-prefix"),
-        "organizationUrl": options.get("system.url-prefix"),
+        "organizationUrl": options.get("system.url-prefix") if last_organization else None,
+        # This is used as a basis to construct organizationUrls
+        "organizationBaseUrl": options.get("system.url-prefix"),
     }
     if user and user.is_authenticated:
         context.update(

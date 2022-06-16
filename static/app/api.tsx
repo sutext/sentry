@@ -11,6 +11,8 @@ import {
   SUDO_REQUIRED,
   SUPERUSER_REQUIRED,
 } from 'sentry/constants/apiErrorCodes';
+import ConfigStore from 'sentry/stores/configStore';
+import {OrganizationSummary} from 'sentry/types';
 import {metric} from 'sentry/utils/analytics';
 import getCsrfToken from 'sentry/utils/getCsrfToken';
 import {uniqueId} from 'sentry/utils/guid';
@@ -582,4 +584,78 @@ export class Client {
       })
     );
   }
+}
+
+const VALIDATE_SUBDOMAIN = /^[a-zA-Z0-9][a-zA-Z0-9-]*[^_-]$/;
+
+function generateOrganizationUrl(organization: OrganizationSummary): string | undefined {
+  const organizationBaseUrl = ConfigStore.get('organizationBaseUrl');
+  const organizationUrl = new URL('/', organizationBaseUrl);
+
+  const {slug} = organization;
+  if (!VALIDATE_SUBDOMAIN.test(slug)) {
+    return undefined;
+  }
+
+  organizationUrl.hostname = `${slug}.${organizationUrl.hostname}`.toLowerCase();
+
+  // Remove any and all trailing slashes
+  return organizationUrl.toString().replace(/\/*$/, '').toLowerCase();
+}
+
+function generateOrganizationBaseUrl(organizationUrl: string) {
+  return `${organizationUrl}${DEFAULT_BASE_URL}`;
+}
+
+type APIRouteType = 'organization-events';
+
+type APIRouterRendererArgs = {
+  organization: OrganizationSummary;
+  organizationUrl: string | undefined;
+  sentryUrl: string;
+  useOrganizationUrl: boolean;
+};
+type APIRouterRenderer = (args: APIRouterRendererArgs) => string;
+
+const routeRenderMap: Record<APIRouteType, APIRouterRenderer> = {
+  'organization-events': function ({organizationUrl, organization, useOrganizationUrl}) {
+    if (!organizationUrl || !useOrganizationUrl) {
+      return `/organizations/${organization.slug}/events/`;
+    }
+    return `${generateOrganizationBaseUrl(organizationUrl)}/events/`;
+  },
+};
+
+function canUseOrganizationUrl(organizationUrl: string | undefined) {
+  if (!organizationUrl) {
+    return false;
+  }
+  const currentURL = new URL('/', window.location.origin);
+  const organizationUrlParsed = new URL('/', organizationUrl);
+  return (
+    currentURL.hostname.toLowerCase() === organizationUrlParsed.hostname.toLowerCase()
+  );
+}
+
+export function resolveUrl(routeType: APIRouteType, organization: OrganizationSummary) {
+  const routeRender = routeRenderMap[routeType];
+  const organizationUrl = generateOrganizationUrl(organization);
+  const sentryUrl = ConfigStore.get('sentryUrl');
+
+  const useOrganizationUrl = canUseOrganizationUrl(organizationUrl);
+  const result = routeRender({
+    organization,
+    organizationUrl,
+    useOrganizationUrl,
+    sentryUrl,
+  });
+
+  const currentTransaction = Sentry.getCurrentHub().getScope()?.getTransaction();
+  if (currentTransaction && currentTransaction.tags.hasOrganizationUrl !== String(true)) {
+    const hasOrganizationUrl =
+      organizationUrl !== undefined ? result.includes(organizationUrl) : false;
+    currentTransaction.setTag('hasOrganizationUrl', String(hasOrganizationUrl));
+  }
+
+  return result;
 }
