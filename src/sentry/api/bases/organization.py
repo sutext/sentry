@@ -5,6 +5,7 @@ from django.core.cache import cache
 from rest_framework.exceptions import ParseError, PermissionDenied
 from rest_framework.request import Request
 
+from sentry import options
 from sentry.api.base import Endpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.helpers.environments import get_environments
@@ -155,6 +156,39 @@ class OrganizationAlertRulePermission(OrganizationPermission):
         "PUT": ["org:write", "org:admin", "alert_rule:write"],
         "DELETE": ["org:write", "org:admin", "alert_rule:write"],
     }
+
+
+def parse_subdomain(subdomain):
+    if subdomain is None:
+        return None, None
+    customer_base_hostname = options.get("system.customer-base-hostname")
+    if not customer_base_hostname:
+        return None, None
+    if "{slug}" not in customer_base_hostname:
+        return None, None
+    org_slug = subdomain
+    region = None
+    if "{region}" in customer_base_hostname:
+        if "." in subdomain:
+            org_slug, _, region = subdomain.rpartition(".")
+        else:
+            return None, None
+    return org_slug, region
+
+
+def generate_customer_url(org_slug, region=None):
+    url_prefix = options.get("system.url-prefix")
+    customer_base_hostname = options.get("system.customer-base-hostname")
+    if not customer_base_hostname:
+        return url_prefix
+    if "{slug}" not in customer_base_hostname:
+        return url_prefix
+    customer_url = customer_base_hostname.replace("{slug}", org_slug)
+    if "{region}" in customer_base_hostname:
+        if region is None:
+            return url_prefix
+        customer_url = customer_url.replace("{region}", region)
+    return customer_url
 
 
 class OrganizationEndpoint(Endpoint):
@@ -341,7 +375,13 @@ class OrganizationEndpoint(Endpoint):
 
         return params
 
-    def convert_args(self, request: Request, organization_slug, *args, **kwargs):
+    def convert_args(self, request: Request, organization_slug=None, *args, **kwargs):
+        if organization_slug is None and request.subdomain is not None:
+            organization_slug, region = parse_subdomain(request.subdomain)
+
+        if not organization_slug:
+            raise ResourceDoesNotExist
+
         try:
             organization = Organization.objects.get_from_cache(slug=organization_slug)
         except Organization.DoesNotExist:
